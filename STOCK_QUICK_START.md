@@ -2,7 +2,9 @@
 
 基于 AKShare 的 A股+港股 深度分析工具，支持微信推送，内置买入信号评分系统。
 
-## 一键运行
+## 两种运行方式
+
+### 方式一：本地运行（推荐）
 
 ```bash
 # 安装依赖（首次）
@@ -16,6 +18,75 @@ STOCK_LIST=601899 python stock_enhanced.py
 
 # 关闭微信推送
 PUSHPLUS_TOKEN=0 python stock_enhanced.py
+```
+
+### 方式二：GitHub Actions 自动运行
+
+1. 在仓库 Settings → Secrets → Actions 中添加 `PUSHPLUS_TOKEN`（你的 PushPlus Token）
+2. 在仓库 Settings → Variables → Actions 中添加 `ENHANCED_STOCK_LIST`（可选，默认9只股票）
+3. 手动触发：Actions → 增强分析 → Run workflow
+4. 自动运行：每天北京时间 18:30 自动执行（需先创建 `enhanced-analysis.yml` 工作流文件）
+
+> **注意**：创建 workflow 文件需要在 GitHub 网页上操作（API 需要 workflow 权限），详见下方。
+
+#### 创建工作流文件
+
+在 GitHub 网页上：
+1. 进入仓库 → `.github/workflows/` → **Create new file**
+2. 文件名：`.github/workflows/enhanced-analysis.yml`
+3. 粘贴以下内容：
+
+```yaml
+name: 增强分析（AKShare + PushPlus）
+
+on:
+  schedule:
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      stock_list:
+        description: '股票代码（逗号分隔）'
+        required: false
+        default: ''
+      skip_push:
+        description: '跳过微信推送'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: enhanced-analysis
+  cancel-in-progress: false
+
+jobs:
+  enhanced-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: |
+          pip install --upgrade pip
+          pip install -i https://pypi.tuna.tsinghua.edu.cn/simple akshare pandas numpy
+      - env:
+          STOCK_LIST: ${{ github.event.inputs.stock_list || vars.ENHANCED_STOCK_LIST || '601899,000426,002714,000582,688063,688122,09868,01810,01788' }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          REPORT_DIR: reports
+        run: |
+          if [ "${{ github.event.inputs.skip_push }}" = "true" ]; then
+            PUSHPLUS_TOKEN=0 python stock_enhanced.py
+          else
+            python stock_enhanced.py
+          fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: enhanced-reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 30
 ```
 
 ## 功能一览
