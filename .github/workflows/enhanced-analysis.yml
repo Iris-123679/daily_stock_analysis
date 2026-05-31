@@ -1,11 +1,9 @@
-name: 每日股票分析
+name: 🔥 深度分析 v6（一份推送）
 
 on:
-  # 定时触发 - 每天北京时间 18:30 (UTC 10:30)
   schedule:
-    - cron: '30 10 * * 1-5'     # 周一到周五
+    - cron: '30 10 * * 1-5'
 
-  # 手动触发
   workflow_dispatch:
     inputs:
       stock_list:
@@ -28,13 +26,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: 随机延迟（避免固定时间访问）
+      - name: 随机延迟
         run: sleep $((RANDOM % 30))
 
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 设置 Python 环境
+      - name: 设置 Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -52,39 +50,19 @@ jobs:
           SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
           REPORT_DIR: reports
         run: |
-          echo "=========================================="
           echo "📊 股票深度分析增强系统 v6"
-          echo "=========================================="
-          echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
-          echo "📈 股票: $STOCK_LIST"
-          echo "📱 推送: $([ -n '$PUSHPLUS_TOKEN' ] && echo '已启用' || echo '未配置')"
-          echo "🤖 AI: $([ -n '$SILICONFLOW_API_KEY' ] && echo '已启用' || echo '未配置')"
-          echo ""
-
+          echo "⏰ $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          echo "📈 $STOCK_LIST"
           if [ "${{ github.event.inputs.skip_push }}" = "true" ]; then
             PUSHPLUS_TOKEN=0 python stock_enhanced.py
           else
             python stock_enhanced.py
           fi
 
-      - name: 上传分析报告
+      - name: 上传报告
         uses: actions/upload-artifact@v6
         if: always()
         with:
           name: stock-reports-${{ github.run_number }}
           path: reports/
           retention-days: 30
-
-      - name: 显示运行结果
-        if: always()
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "📊 分析完成"
-          echo "=========================================="
-          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
-            echo "生成的报告:"
-            ls -la reports/
-          else
-            echo "⚠️ 未生成报告文件"
-          fi
