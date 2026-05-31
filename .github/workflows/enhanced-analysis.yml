@@ -1,12 +1,15 @@
-name: 增强分析（AKShare + PushPlus）
+name: 每日股票分析
 
 on:
+  # 定时触发 - 每天北京时间 18:30 (UTC 10:30)
   schedule:
-    - cron: '30 10 * * 1-5'
+    - cron: '30 10 * * 1-5'     # 周一到周五
+
+  # 手动触发
   workflow_dispatch:
     inputs:
       stock_list:
-        description: '股票代码（逗号分隔，留空使用默认）'
+        description: '股票代码（逗号分隔，留空使用默认9只）'
         required: false
         default: ''
       skip_push:
@@ -16,11 +19,11 @@ on:
         type: boolean
 
 concurrency:
-  group: enhanced-analysis
+  group: daily-stock-analysis
   cancel-in-progress: false
 
 jobs:
-  enhanced-analysis:
+  analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -37,23 +40,25 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 安装轻量依赖
+      - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -i https://pypi.tuna.tsinghua.edu.cn/simple akshare pandas numpy
 
-      - name: 执行增强分析
+      - name: 执行分析
         env:
           STOCK_LIST: ${{ github.event.inputs.stock_list || vars.ENHANCED_STOCK_LIST || '601899,000426,002714,000582,688063,688122,09868,01810,01788' }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
           REPORT_DIR: reports
         run: |
           echo "=========================================="
-          echo "📊 股票深度分析增强系统 v4"
+          echo "📊 股票深度分析增强系统 v6"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "📈 股票: $STOCK_LIST"
           echo "📱 推送: $([ -n '$PUSHPLUS_TOKEN' ] && echo '已启用' || echo '未配置')"
+          echo "🤖 AI: $([ -n '$SILICONFLOW_API_KEY' ] && echo '已启用' || echo '未配置')"
           echo ""
 
           if [ "${{ github.event.inputs.skip_push }}" = "true" ]; then
@@ -66,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: enhanced-reports-${{ github.run_number }}
+          name: stock-reports-${{ github.run_number }}
           path: reports/
           retention-days: 30
 
