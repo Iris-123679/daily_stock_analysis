@@ -1,0 +1,85 @@
+name: 增强分析（AKShare + PushPlus）
+
+on:
+  schedule:
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      stock_list:
+        description: '股票代码（逗号分隔，留空使用默认）'
+        required: false
+        default: ''
+      skip_push:
+        description: '跳过微信推送'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: enhanced-analysis
+  cancel-in-progress: false
+
+jobs:
+  enhanced-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 随机延迟（避免固定时间访问）
+        run: sleep $((RANDOM % 30))
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装轻量依赖
+        run: |
+          pip install --upgrade pip
+          pip install -i https://pypi.tuna.tsinghua.edu.cn/simple akshare pandas numpy
+
+      - name: 执行增强分析
+        env:
+          STOCK_LIST: ${{ github.event.inputs.stock_list || vars.ENHANCED_STOCK_LIST || '601899,000426,002714,000582,688063,688122,09868,01810,01788' }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          REPORT_DIR: reports
+        run: |
+          echo "=========================================="
+          echo "📊 股票深度分析增强系统 v4"
+          echo "=========================================="
+          echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+          echo "📈 股票: $STOCK_LIST"
+          echo "📱 推送: $([ -n '$PUSHPLUS_TOKEN' ] && echo '已启用' || echo '未配置')"
+          echo ""
+
+          if [ "${{ github.event.inputs.skip_push }}" = "true" ]; then
+            PUSHPLUS_TOKEN=0 python stock_enhanced.py
+          else
+            python stock_enhanced.py
+          fi
+
+      - name: 上传分析报告
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: enhanced-reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 30
+
+      - name: 显示运行结果
+        if: always()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "📊 分析完成"
+          echo "=========================================="
+          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
+            echo "生成的报告:"
+            ls -la reports/
+          else
+            echo "⚠️ 未生成报告文件"
+          fi
