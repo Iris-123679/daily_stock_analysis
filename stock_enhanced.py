@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-股票深度分析增强脚本 v4
-功能：财务指标、技术分析(含评分系统)、资金异动、基本面透视、DCF估值
-数据源：AKShare（百度估值 + 东方财富 + 新浪）
+股票深度分析增强脚本 v5
+功能：财务指标、技术分析(含评分系统)、资金异动、基本面透视、DCF估值、AI智能分析
+数据源：AKShare（百度估值 + 东方财富 + 新浪）+ SiliconFlow (DeepSeek) AI分析
 支持：A股 + 港股
-v4新增：买入信号评分系统（参考 daily_stock_analysis 项目）
+v5新增：AI大模型分析（市场情绪、新闻解读、操作建议、风险提示）
 """
 
 import json
@@ -29,6 +29,11 @@ MAX_RETRIES = 3
 # PushPlus 微信推送配置
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "f667d88c4b68458cb0b81f0bb4f40b97")
 PUSHPLUS_API = "http://www.pushplus.plus/send"
+
+# SiliconFlow AI 分析配置
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-vlxfwfmxxefjnzokbqhjxvmkbmgygpiihtvjqooucyxxfmqe")
+SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+SILICONFLOW_MODEL = os.environ.get("AI_MODEL", "deepseek-ai/DeepSeek-V3")
 
 
 def pushplus_send(title: str, content: str, template: str = "html") -> bool:
@@ -780,11 +785,141 @@ def calc_dcf_valuation(stock_code: str) -> dict:
 
 
 # ============================================================
+# 6. AI 大模型分析
+# ============================================================
+
+def ai_analyze_stock(stock_code: str, financial: dict, technical: dict,
+                     fund_flow: dict, fundamentals: dict, dcf: dict) -> dict:
+    """使用 DeepSeek 大模型生成综合分析报告"""
+    result = {
+        "market_sentiment": "",       # 市场情绪判断
+        "operation_advice": "",       # 操作建议
+        "risk_warning": "",           # 风险提示
+        "key_catalyst": "",           # 关键催化
+        "target_price_analysis": "",  # 目标价分析
+        "summary": "",               # 综合评述
+        "model": SILICONFLOW_MODEL,
+    }
+
+    if not SILICONFLOW_API_KEY:
+        result["summary"] = "⚠️ AI分析未启用（未配置 SILICONFLOW_API_KEY）"
+        return result
+
+    stock_name = get_stock_name(stock_code)
+    market_tag = "港股" if is_hk_stock(stock_code) else "A股"
+    price_unit = "港元" if is_hk_stock(stock_code) else "元"
+
+    # 构建结构化 prompt
+    prompt = f"""你是一位专业的{market_tag}投资分析师，请基于以下数据分析 {stock_name}({stock_code}) 的投资价值。
+
+## 基本面数据
+- PE(TTM): {financial.get('pe_ttm', 'N/A')} | PB: {financial.get('pb', 'N/A')}
+- ROE: {financial.get('roe', 'N/A')}% | 净利率: {financial.get('net_margin', 'N/A')}%
+- 营收同比: {financial.get('revenue_yoy', 'N/A')}% | 净利润同比: {financial.get('profit_yoy', 'N/A')}%
+- 估值判断: {financial.get('valuation_level', 'N/A')}
+- 股息率: {financial.get('dv_ratio', 'N/A')}%
+
+## 技术面数据
+- 最新价: {technical.get('price', 'N/A')} {price_unit} | 涨跌幅: {technical.get('change_pct', 'N/A')}%
+- MA5: {technical.get('ma5', 'N/A')} | MA10: {technical.get('ma10', 'N/A')} | MA20: {technical.get('ma20', 'N/A')} | MA60: {technical.get('ma60', 'N/A')}
+- MACD: {technical.get('macd_signal', 'N/A')} (DIF: {technical.get('macd_dif', 'N/A')}, DEA: {technical.get('macd_dea', 'N/A')})
+- RSI(14): {technical.get('rsi_14', 'N/A')} ({technical.get('rsi_signal', 'N/A')})
+- 布林带位置: {technical.get('boll_position', 'N/A')}
+- 综合趋势: {technical.get('trend', 'N/A')}
+- 乖离率(MA5): {technical.get('bias_ma5', 'N/A')}%
+- 量能状态: {technical.get('volume_status', 'N/A')} | 量比: {technical.get('volume_ratio_5d', 'N/A')}
+
+## 买入信号评分
+- 综合评分: {technical.get('signal_score', 'N/A')}/100
+- 信号等级: {technical.get('buy_signal', 'N/A')}
+- 看多理由: {'; '.join(technical.get('signal_reasons') or [])}
+- 风险因素: {'; '.join(technical.get('risk_factors') or [])}
+
+## 资金面数据
+- 主力净流入: {fund_flow.get('main_net_inflow', 'N/A')}
+- 资金信号: {fund_flow.get('signal', 'N/A')}
+
+## 业绩数据
+- 最新报告期: {fundamentals.get('latest_quarter', 'N/A')}
+- 营业收入: {fundamentals.get('revenue', 'N/A')}亿 | 净利润: {fundamentals.get('net_profit', 'N/A')}亿
+- EPS: {fundamentals.get('eps', 'N/A')} | 每股净资产: {fundamentals.get('bvps', 'N/A')}
+
+## DCF估值（仅A股）
+- 内在价值: {dcf.get('intrinsic_value', 'N/A')} | 当前价格: {dcf.get('current_price', 'N/A')}
+- 安全边际: {dcf.get('margin_of_safety', 'N/A')}% | 估值判断: {dcf.get('verdict', 'N/A')}
+
+---
+
+请用JSON格式输出分析结果，严格遵循以下结构（不要输出其他内容）：
+{{
+  "market_sentiment": "市场情绪判断（1-2句话，如：当前处于XX阶段，市场情绪XX）",
+  "operation_advice": "操作建议（1-2句话，如：建议XX仓位XX，止损位XX）",
+  "risk_warning": "风险提示（1-2句话，如：需关注XX风险，若XX则应XX）",
+  "key_catalyst": "关键催化（1句话，如：近期需关注XX事件/数据）",
+  "target_price_analysis": "目标价分析（1句话，结合估值和技术面给出合理区间）",
+  "summary": "综合评述（3-5句话，涵盖基本面+技术面+资金面+估值，给出明确结论）"
+}}"""
+
+    try:
+        req_data = json.dumps({
+            "model": SILICONFLOW_MODEL,
+            "messages": [
+                {"role": "system", "content": "你是一位资深A股/港股投资分析师，擅长基本面+技术面+资金面三维分析。请严格按JSON格式输出，不要包含markdown代码块标记。"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 800,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            SILICONFLOW_API_URL,
+            data=req_data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp_data = json.loads(resp.read().decode("utf-8"))
+            content = resp_data["choices"][0]["message"]["content"].strip()
+
+            # 清理可能的 markdown 代码块标记
+            if content.startswith("```"):
+                content = content.split("\n", 1)[-1]
+            if content.endswith("```"):
+                content = content.rsplit("```", 1)[0]
+            if content.startswith("json"):
+                content = content[4:].strip()
+
+            # 解析 JSON
+            ai_result = json.loads(content)
+
+            result["market_sentiment"] = ai_result.get("market_sentiment", "")
+            result["operation_advice"] = ai_result.get("operation_advice", "")
+            result["risk_warning"] = ai_result.get("risk_warning", "")
+            result["key_catalyst"] = ai_result.get("key_catalyst", "")
+            result["target_price_analysis"] = ai_result.get("target_price_analysis", "")
+            result["summary"] = ai_result.get("summary", "")
+
+    except json.JSONDecodeError as e:
+        # JSON 解析失败时，尝试直接使用原始内容
+        result["summary"] = f"AI分析返回格式异常，原始内容: {content[:200] if 'content' in dir() else str(e)}"
+        print(f"  [WARN] AI分析JSON解析失败: {e}")
+    except Exception as e:
+        result["summary"] = f"⚠️ AI分析调用失败: {e}"
+        print(f"  [WARN] AI分析失败: {e}")
+
+    return result
+
+
+# ============================================================
 # 报告生成
 # ============================================================
 
 def build_push_summary(stock_code: str, financial: dict, technical: dict,
-                       fund_flow: dict, fundamentals: dict, dcf: dict) -> tuple:
+                       fund_flow: dict, fundamentals: dict, dcf: dict,
+                       ai_analysis: dict = None) -> tuple:
     """构建微信推送摘要，返回 (title, html_content)"""
     stock_name = get_stock_name(stock_code)
     market_tag = "港股" if is_hk_stock(stock_code) else "A股"
@@ -909,9 +1044,43 @@ def build_push_summary(stock_code: str, financial: dict, technical: dict,
         </div>
       </div>"""
 
+    # AI 分析部分
+    if ai_analysis:
+        ai_summary = ai_analysis.get("summary", "")
+        ai_advice = ai_analysis.get("operation_advice", "")
+        ai_risk = ai_analysis.get("risk_warning", "")
+        ai_sentiment = ai_analysis.get("market_sentiment", "")
+        ai_catalyst = ai_analysis.get("key_catalyst", "")
+        ai_target = ai_analysis.get("target_price_analysis", "")
+        ai_model = ai_analysis.get("model", "")
+
+        html += f"""
+      <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 10px; padding: 14px; margin-bottom: 10px; color: white;">
+        <h3 style="margin:0 0 8px 0; font-size: 15px; color: #00d4ff;">🤖 AI 智能分析 <span style="font-size:10px; color:#888;">({ai_model})</span></h3>
+        <div style="font-size:13px; line-height:1.6; color:#e0e0e0;">
+          <div style="margin-bottom:6px;">
+            <span style="color:#00d4ff;">📋 综合评述</span><br/>
+            {ai_summary or 'N/A'}
+          </div>
+          <div style="display:flex; gap:8px; margin-bottom:6px;">
+            <div style="flex:1; padding:6px 8px; background:rgba(76,175,80,0.2); border-radius:6px; border-left:3px solid #4CAF50;">
+              <span style="color:#4CAF50; font-size:11px;">💡 操作建议</span><br/>
+              <span style="font-size:12px;">{ai_advice or 'N/A'}</span>
+            </div>
+            <div style="flex:1; padding:6px 8px; background:rgba(244,67,54,0.2); border-radius:6px; border-left:3px solid #F44336;">
+              <span style="color:#F44336; font-size:11px;">⚠️ 风险提示</span><br/>
+              <span style="font-size:12px;">{ai_risk or 'N/A'}</span>
+            </div>
+          </div>
+          {"<div style='font-size:12px; color:#aaa;'><span style=color:#FF9800>🎯</span> " + ai_sentiment + "</div>" if ai_sentiment else ""}
+          {"<div style='font-size:12px; color:#aaa;'><span style=color:#9C27B0>🔑</span> " + ai_catalyst + "</div>" if ai_catalyst else ""}
+          {"<div style='font-size:12px; color:#aaa;'><span style=color:#2196F3>🎯</span> " + ai_target + "</div>" if ai_target else ""}
+        </div>
+      </div>"""
+
     html += """
       <p style="text-align:center; font-size:11px; color:#999; margin-top:8px;">
-        ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v4
+        ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v5
       </p>
     </div>"""
 
@@ -926,20 +1095,23 @@ def generate_stock_report(stock_code: str) -> tuple:
     print(f"分析: {stock_name}({stock_code}) [{market_tag}]")
     print(f"{'='*50}")
 
-    print("  [1/5] 财务指标...")
+    print("  [1/6] 财务指标...")
     financial = get_financial_indicators(stock_code)
 
-    print("  [2/5] 技术分析...")
+    print("  [2/6] 技术分析...")
     technical = get_technical_analysis(stock_code)
 
-    print("  [3/5] 资金异动...")
+    print("  [3/6] 资金异动...")
     fund_flow = get_fund_flow(stock_code)
 
-    print("  [4/5] 基本面透视...")
+    print("  [4/6] 基本面透视...")
     fundamentals = get_fundamentals(stock_code)
 
-    print("  [5/5] DCF估值...")
+    print("  [5/6] DCF估值...")
     dcf = calc_dcf_valuation(stock_code)
+
+    print("  [6/6] AI智能分析...")
+    ai_analysis = ai_analyze_stock(stock_code, financial, technical, fund_flow, fundamentals, dcf)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     price_unit = "港元" if is_hk_stock(stock_code) else "元"
@@ -1100,7 +1272,31 @@ def generate_stock_report(stock_code: str) -> tuple:
 
 ---
 
-*报告由 AI 股票分析增强系统 v4 自动生成*
+## 6. AI 智能分析
+
+> 模型: {ai_analysis.get('model', 'N/A')}
+
+### 📋 综合评述
+{ai_analysis.get('summary', 'N/A')}
+
+### 💡 操作建议
+{ai_analysis.get('operation_advice', 'N/A')}
+
+### ⚠️ 风险提示
+{ai_analysis.get('risk_warning', 'N/A')}
+
+### 市场情绪
+{ai_analysis.get('market_sentiment', 'N/A')}
+
+### 🔑 关键催化
+{ai_analysis.get('key_catalyst', 'N/A')}
+
+### 🎯 目标价分析
+{ai_analysis.get('target_price_analysis', 'N/A')}
+
+---
+
+*报告由 AI 股票分析增强系统 v5 自动生成*
 """
 
     return report, {
@@ -1109,6 +1305,7 @@ def generate_stock_report(stock_code: str) -> tuple:
         "fund_flow": fund_flow,
         "fundamentals": fundamentals,
         "dcf": dcf,
+        "ai_analysis": ai_analysis,
     }
 
 
@@ -1157,6 +1354,7 @@ def main():
                     analysis_data["fund_flow"],
                     analysis_data["fundamentals"],
                     analysis_data["dcf"],
+                    analysis_data.get("ai_analysis"),
                 )
                 pushplus_send(push_title, push_html)
 
