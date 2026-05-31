@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-股票深度分析增强脚本 v5
-功能：财务指标、技术分析(含评分系统)、资金异动、基本面透视、DCF估值、AI智能分析
+股票深度分析增强脚本 v6
+功能：大盘复盘、财务指标、技术分析(含评分系统)、资金异动、基本面透视、DCF估值、AI智能分析、新闻摘要
 数据源：AKShare（百度估值 + 东方财富 + 新浪）+ SiliconFlow (DeepSeek) AI分析
 支持：A股 + 港股
-v5新增：AI大模型分析（市场情绪、新闻解读、操作建议、风险提示）
+v6：整合为一份完整推送（大盘复盘 + 个股全维度分析合并）
 """
 
 import json
@@ -914,12 +914,229 @@ def ai_analyze_stock(stock_code: str, financial: dict, technical: dict,
 
 
 # ============================================================
+# 7. 大盘复盘
+# ============================================================
+
+def get_market_review() -> dict:
+    """获取大盘指数数据，用于复盘"""
+    result = {
+        "indices": [],       # 指数列表 [{name, code, price, change_pct, volume}]
+        "market_breadth": "", # 市场广度描述
+        "summary": "",       # AI 大盘总结
+    }
+
+    # A股核心指数
+    index_map = {
+        "上证指数": "000001",
+        "深证成指": "399001",
+        "创业板指": "399006",
+        "科创50": "000688",
+    }
+
+    for name, code in index_map.items():
+        try:
+            df = ak_request(ak.stock_zh_index_daily, symbol=f"sh{code}" if code.startswith("0000") else f"sz{code}")
+            if df is not None and len(df) > 0:
+                latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else latest
+                close = float(latest.get("close", latest.iloc[-1]))
+                prev_close = float(prev.get("close", prev.iloc[-1]))
+                change_pct = (close - prev_close) / prev_close * 100 if prev_close else 0
+                result["indices"].append({
+                    "name": name,
+                    "code": code,
+                    "price": round(close, 2),
+                    "change_pct": round(change_pct, 2),
+                })
+        except Exception as e:
+            print(f"  [WARN] 获取{name}数据失败: {e}")
+            result["indices"].append({
+                "name": name,
+                "code": code,
+                "price": None,
+                "change_pct": None,
+            })
+
+    # 港股指数
+    try:
+        df_hk = ak_request(ak.stock_hk_index_daily_em, symbol="HSI")
+        if df_hk is not None and len(df_hk) > 0:
+            latest = df_hk.iloc[-1]
+            prev = df_hk.iloc[-2] if len(df_hk) > 1 else latest
+            close = float(latest.iloc[-1])
+            prev_close = float(prev.iloc[-1])
+            change_pct = (close - prev_close) / prev_close * 100 if prev_close else 0
+            result["indices"].append({
+                "name": "恒生指数",
+                "code": "HSI",
+                "price": round(close, 2),
+                "change_pct": round(change_pct, 2),
+            })
+    except Exception as e:
+        print(f"  [WARN] 获取恒生指数数据失败: {e}")
+
+    # 市场广度
+    try:
+        up_count = sum(1 for idx in result["indices"] if (idx.get("change_pct") or 0) > 0)
+        down_count = sum(1 for idx in result["indices"] if (idx.get("change_pct") or 0) < 0)
+        flat_count = len(result["indices"]) - up_count - down_count
+        result["market_breadth"] = f"上涨{up_count}只, 下跌{down_count}只, 平盘{flat_count}只"
+    except Exception:
+        pass
+
+    # AI 大盘总结
+    if SILICONFLOW_API_KEY and result["indices"]:
+        index_summary_parts = []
+        for idx in result["indices"]:
+            name = idx["name"]
+            pct = idx.get("change_pct")
+            if pct is not None:
+                direction = "📈" if pct > 0 else "📉" if pct < 0 else "➡️"
+                index_summary_parts.append(f"{name}: {direction} {pct:+.2f}%")
+        index_summary = "\n".join(index_summary_parts)
+
+        try:
+            prompt = f"""你是一位资深A股市场分析师，请根据今日主要指数表现，用2-3句话总结大盘走势和后市展望。
+
+今日指数表现：
+{index_summary}
+
+请用JSON格式输出：
+{{
+  "summary": "大盘走势总结+后市展望（2-3句话）"
+}}"""
+
+            req_data = json.dumps({
+                "model": SILICONFLOW_MODEL,
+                "messages": [
+                    {"role": "system", "content": "你是资深A股市场分析师。请严格按JSON格式输出，不要包含markdown代码块标记。"},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 200,
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                SILICONFLOW_API_URL,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+                },
+            )
+
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                content = resp_data["choices"][0]["message"]["content"].strip()
+                if content.startswith("```"):
+                    content = content.split("\n", 1)[-1]
+                if content.endswith("```"):
+                    content = content.rsplit("```", 1)[0]
+                if content.startswith("json"):
+                    content = content[4:].strip()
+                ai_result = json.loads(content)
+                result["summary"] = ai_result.get("summary", "")
+        except Exception as e:
+            print(f"  [WARN] AI大盘总结失败: {e}")
+
+    return result
+
+
+# ============================================================
+# 8. 个股新闻
+# ============================================================
+
+def get_stock_news(stock_code: str) -> dict:
+    """获取个股相关新闻"""
+    result = {
+        "news": [],     # 新闻列表 [{title, url, source, time}]
+        "summary": "",  # AI 新闻摘要
+    }
+
+    if is_hk_stock(stock_code):
+        # 港股新闻
+        try:
+            df = ak_request(ak.stock_hk_news_em, symbol=stock_code)
+            if df is not None and len(df) > 0:
+                for _, row in df.head(5).iterrows():
+                    result["news"].append({
+                        "title": str(row.get("新闻标题", "")),
+                        "source": str(row.get("新闻来源", "")),
+                        "time": str(row.get("发布时间", "")),
+                    })
+        except Exception as e:
+            print(f"  [WARN] 获取港股新闻失败: {e}")
+    else:
+        # A股新闻
+        try:
+            df = ak_request(ak.stock_news_em, symbol=stock_code)
+            if df is not None and len(df) > 0:
+                for _, row in df.head(5).iterrows():
+                    result["news"].append({
+                        "title": str(row.get("新闻标题", "")),
+                        "source": str(row.get("新闻来源", "")),
+                        "time": str(row.get("发布时间", "")),
+                    })
+        except Exception as e:
+            print(f"  [WARN] 获取A股新闻失败: {e}")
+
+    # AI 新闻摘要
+    if SILICONFLOW_API_KEY and result["news"]:
+        news_text = "\n".join([f"- {n['title']} ({n.get('time', '')})" for n in result["news"]])
+        stock_name = get_stock_name(stock_code)
+        try:
+            prompt = f"""请根据以下{stock_name}相关新闻，用1-2句话总结消息面情况：
+
+{news_text}
+
+请用JSON格式输出：
+{{
+  "summary": "消息面总结（1-2句话，包含利好/利空判断）"
+}}"""
+
+            req_data = json.dumps({
+                "model": SILICONFLOW_MODEL,
+                "messages": [
+                    {"role": "system", "content": "你是专业投资分析师。请严格按JSON格式输出，不要包含markdown代码块标记。"},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 150,
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                SILICONFLOW_API_URL,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+                },
+            )
+
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+                content = resp_data["choices"][0]["message"]["content"].strip()
+                if content.startswith("```"):
+                    content = content.split("\n", 1)[-1]
+                if content.endswith("```"):
+                    content = content.rsplit("```", 1)[0]
+                if content.startswith("json"):
+                    content = content[4:].strip()
+                ai_result = json.loads(content)
+                result["summary"] = ai_result.get("summary", "")
+        except Exception as e:
+            print(f"  [WARN] AI新闻摘要失败: {e}")
+
+    return result
+
+
+# ============================================================
 # 报告生成
 # ============================================================
 
 def build_push_summary(stock_code: str, financial: dict, technical: dict,
                        fund_flow: dict, fundamentals: dict, dcf: dict,
-                       ai_analysis: dict = None) -> tuple:
+                       ai_analysis: dict = None, news: dict = None) -> tuple:
     """构建微信推送摘要，返回 (title, html_content)"""
     stock_name = get_stock_name(stock_code)
     market_tag = "港股" if is_hk_stock(stock_code) else "A股"
@@ -1078,9 +1295,27 @@ def build_push_summary(stock_code: str, financial: dict, technical: dict,
         </div>
       </div>"""
 
+    # 新闻部分
+    if news and news.get("news"):
+        news_items = news["news"][:3]  # 最多显示3条
+        news_html = ""
+        for n in news_items:
+            news_html += f"""
+            <div style="padding:4px 0; border-bottom:1px solid #eee; font-size:12px;">
+              <span style="color:#333;">{n.get('title', '')}</span>
+              <span style="color:#999; font-size:11px;">{n.get('time', '')[:10]}</span>
+            </div>"""
+        news_summary = news.get("summary", "")
+        html += f"""
+      <div style="background: #f8f9fa; border-radius: 10px; padding: 14px; margin-bottom: 10px;">
+        <h3 style="margin:0 0 8px 0; font-size: 15px; color: #333;">📰 消息面</h3>
+        {news_html}
+        {"<div style='margin-top:6px; font-size:12px; color:#666; padding:6px 8px; background:#e3f2fd; border-radius:6px;'><span style=color:#1565C0>🤖</span> " + news_summary + "</div>" if news_summary else ""}
+      </div>"""
+
     html += """
       <p style="text-align:center; font-size:11px; color:#999; margin-top:8px;">
-        ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v5
+        ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v6
       </p>
     </div>"""
 
@@ -1095,23 +1330,26 @@ def generate_stock_report(stock_code: str) -> tuple:
     print(f"分析: {stock_name}({stock_code}) [{market_tag}]")
     print(f"{'='*50}")
 
-    print("  [1/6] 财务指标...")
+    print("  [1/7] 财务指标...")
     financial = get_financial_indicators(stock_code)
 
-    print("  [2/6] 技术分析...")
+    print("  [2/7] 技术分析...")
     technical = get_technical_analysis(stock_code)
 
-    print("  [3/6] 资金异动...")
+    print("  [3/7] 资金异动...")
     fund_flow = get_fund_flow(stock_code)
 
-    print("  [4/6] 基本面透视...")
+    print("  [4/7] 基本面透视...")
     fundamentals = get_fundamentals(stock_code)
 
-    print("  [5/6] DCF估值...")
+    print("  [5/7] DCF估值...")
     dcf = calc_dcf_valuation(stock_code)
 
-    print("  [6/6] AI智能分析...")
+    print("  [6/7] AI智能分析...")
     ai_analysis = ai_analyze_stock(stock_code, financial, technical, fund_flow, fundamentals, dcf)
+
+    print("  [7/7] 新闻摘要...")
+    news = get_stock_news(stock_code)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     price_unit = "港元" if is_hk_stock(stock_code) else "元"
@@ -1296,7 +1534,15 @@ def generate_stock_report(stock_code: str) -> tuple:
 
 ---
 
-*报告由 AI 股票分析增强系统 v5 自动生成*
+## 7. 新闻摘要
+
+{chr(10).join([f"- [{n['title']}]({n.get('url', '#')}) ({n.get('time', '')} {n.get('source', '')})" for n in (news.get('news') or [])]) or '暂无新闻'}
+
+**AI消息面总结**: {news.get('summary') or 'N/A'}
+
+---
+
+*报告由 AI 股票分析增强系统 v6 自动生成*
 """
 
     return report, {
@@ -1306,6 +1552,7 @@ def generate_stock_report(stock_code: str) -> tuple:
         "fundamentals": fundamentals,
         "dcf": dcf,
         "ai_analysis": ai_analysis,
+        "news": news,
     }
 
 
@@ -1319,20 +1566,24 @@ def main():
 
     # 是否推送微信（默认推送，设 PUSHPLUS_TOKEN=0 可关闭）
     enable_push = PUSHPLUS_TOKEN and PUSHPLUS_TOKEN != "0"
-    
-    # 推送模式：single=逐只推送, merged=合并一份推送（默认）
-    push_mode = os.environ.get("PUSH_MODE", "merged")
 
     print(f"准备分析 {len(stocks)} 只股票: {stocks}")
     print(f"AKShare 版本: {ak.__version__}")
     if enable_push:
-        print(f"📱 微信推送: 已启用 (模式: {push_mode})")
+        print(f"📱 微信推送: 已启用")
     else:
         print(f"📱 微信推送: 已关闭")
 
+    # ======== 第一阶段：大盘复盘 ========
+    print(f"\n{'='*50}")
+    print("🌍 大盘复盘...")
+    print(f"{'='*50}")
+    market_review = get_market_review()
+
+    # ======== 第二阶段：逐只分析 ========
     success_count = 0
     fail_count = 0
-    all_stock_cards = []  # 收集所有股票的推送卡片，最后合并
+    all_stock_data = []  # 收集所有股票的分析数据和推送卡片
 
     for stock_code in stocks:
         try:
@@ -1348,7 +1599,7 @@ def main():
 
             print(f"  ✅ 报告已保存: {filepath}")
 
-            # 收集推送卡片
+            # 生成推送卡片
             if enable_push:
                 push_title, push_html = build_push_summary(
                     stock_code,
@@ -1358,13 +1609,9 @@ def main():
                     analysis_data["fundamentals"],
                     analysis_data["dcf"],
                     analysis_data.get("ai_analysis"),
+                    analysis_data.get("news"),
                 )
-                if push_mode == "single":
-                    # 逐只推送模式
-                    pushplus_send(push_title, push_html)
-                else:
-                    # 合并推送模式：收集卡片
-                    all_stock_cards.append((push_title, push_html))
+                all_stock_data.append((push_title, push_html, analysis_data))
 
             success_count += 1
         except Exception as e:
@@ -1377,50 +1624,85 @@ def main():
             print(f"  ⏳ 等待5秒后分析下一只...")
             time.sleep(5)
 
-    # 合并推送：所有股票合并成一份
-    if enable_push and success_count > 0:
+    # ======== 第三阶段：合并为一份推送 ========
+    if enable_push and (success_count > 0 or market_review.get("indices")):
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        if push_mode == "merged" and all_stock_cards:
-            # 合并所有股票卡片为一份推送
-            merged_html = f"""
-            <div style="font-family: -apple-system, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
-              <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:16px; border-radius:12px; margin-bottom:12px;">
-                <h2 style="margin:0 0 4px 0; font-size:18px;">📊 股票深度分析汇总</h2>
-                <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 成功{success_count}只 | 失败{fail_count}只</p>
-              </div>
-            """
-            for i, (title, html) in enumerate(all_stock_cards, 1):
-                # 去掉每个卡片的外层 div 包裹，避免嵌套
-                card_html = html.strip()
-                # 移除最外层 div 的开始和结束标签
-                if card_html.startswith('<div style="font-family'):
-                    # 找到第一个 > 后面的内容
-                    first_gt = card_html.index('>') + 1
-                    card_html = card_html[first_gt:]
-                    if card_html.endswith('</div>'):
-                        card_html = card_html[:-6]
-                merged_html += card_html
-            
-            merged_html += """
-              <p style="text-align:center; font-size:11px; color:#999; margin-top:8px;">
-                ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v5
-              </p>
-            </div>"""
-            pushplus_send(f"📊 股票深度分析汇总 ({success_count}只)", merged_html)
-        else:
-            # 逐只推送模式的汇总
-            summary_html = f"""
-            <div style="font-family: -apple-system, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
-              <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:16px; border-radius:12px; margin-bottom:12px;">
-                <h2 style="margin:0 0 4px 0; font-size:18px;">📊 今日股票分析汇总</h2>
-                <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 成功{success_count}只 | 失败{fail_count}只</p>
-              </div>
-              <p style="font-size:13px; color:#666; text-align:center;">
-                各股详细分析已逐条推送，完整报告请查看本地文件
-              </p>
-            </div>"""
-            pushplus_send("📊 今日股票分析汇总", summary_html)
+        report_date = datetime.now().strftime("%Y-%m-%d")
+
+        # 构建完整推送 HTML
+        full_html = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
+
+        <!-- 标题区 -->
+        <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:18px; border-radius:12px; margin-bottom:12px;">
+          <h1 style="margin:0 0 4px 0; font-size:20px;">📅 {report_date} 股票分析日报</h1>
+          <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 分析{success_count}只 | ⚠️ 仅供参考</p>
+        </div>"""
+
+        # ===== 大盘复盘 =====
+        if market_review.get("indices"):
+            full_html += """
+        <div style="background:#f8f9fa; border-radius:10px; padding:14px; margin-bottom:12px;">
+          <h2 style="margin:0 0 10px 0; font-size:16px; color:#333;">🌍 大盘复盘</h2>
+          <table style="width:100%; font-size:13px; border-collapse:collapse;">"""
+
+            for idx in market_review["indices"]:
+                name = idx["name"]
+                pct = idx.get("change_pct")
+                price = idx.get("price")
+                if pct is not None and price is not None:
+                    color = "#F44336" if pct > 0 else "#4CAF50" if pct < 0 else "#999"
+                    arrow = "🔺" if pct > 0 else "🔻" if pct < 0 else "➡️"
+                    full_html += f"""
+            <tr>
+              <td style="padding:4px 0; font-weight:bold;">{name}</td>
+              <td style="text-align:right;">{price}</td>
+              <td style="text-align:right; color:{color}; font-weight:bold;">{arrow} {pct:+.2f}%</td>
+            </tr>"""
+
+            full_html += """
+          </table>"""
+
+            # AI 大盘总结
+            if market_review.get("summary"):
+                full_html += f"""
+          <div style="margin-top:8px; padding:8px 10px; background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius:8px; color:#e0e0e0; font-size:12px; line-height:1.6;">
+            <span style="color:#00d4ff;">🤖 AI 大盘解读</span><br/>
+            {market_review['summary']}
+          </div>"""
+
+            full_html += """
+        </div>"""
+
+        # ===== 个股分析卡片 =====
+        full_html += f"""
+        <div style="background:linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color:white; padding:12px 16px; border-radius:10px; margin-bottom:12px;">
+          <h2 style="margin:0; font-size:16px;">📈 个股深度分析（{success_count}只）</h2>
+        </div>"""
+
+        for i, (push_title, push_html, _) in enumerate(all_stock_data, 1):
+            # 提取每个卡片的核心内容（去掉外层div和footer）
+            card_html = push_html.strip()
+            # 移除最外层 div 包裹
+            if card_html.startswith('<div style="font-family'):
+                first_gt = card_html.index('>') + 1
+                card_html = card_html[first_gt:]
+                if card_html.endswith('</div>'):
+                    card_html = card_html[:-6]
+            # 移除旧的 footer
+            footer_marker = '⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统'
+            if footer_marker in card_html:
+                card_html = card_html[:card_html.rfind('<p style="text-align:center')]
+            full_html += card_html
+
+        # ===== 底部 =====
+        full_html += f"""
+        <div style="margin-top:12px; padding:10px; background:#f0f0f0; border-radius:8px; text-align:center;">
+          <p style="margin:0; font-size:12px; color:#666;">📊 分析{success_count}只 | ❌ 失败{fail_count}只</p>
+          <p style="margin:4px 0 0 0; font-size:11px; color:#999;">⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v6</p>
+        </div>
+        </div>"""
+
+        pushplus_send(f"📅 {report_date} 股票分析日报 ({success_count}只)", full_html)
 
     print(f"\n{'='*50}")
     print(f"分析完成！成功: {success_count}, 失败: {fail_count}")
