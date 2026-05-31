@@ -31,7 +31,7 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "f667d88c4b68458cb0b81f0bb4f40
 PUSHPLUS_API = "http://www.pushplus.plus/send"
 
 # SiliconFlow AI 分析配置
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-vlxfwfmxxefjnzokbqhjxvmkbmgygpiihtvjqooucyxxfmqe")
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-klnitjvsylnsvnonjtgnwsbafjtczzrprvrappeblditflqy")
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
 SILICONFLOW_MODEL = os.environ.get("AI_MODEL", "deepseek-ai/DeepSeek-V3")
 
