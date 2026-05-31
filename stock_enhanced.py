@@ -1319,23 +1319,26 @@ def main():
 
     # 是否推送微信（默认推送，设 PUSHPLUS_TOKEN=0 可关闭）
     enable_push = PUSHPLUS_TOKEN and PUSHPLUS_TOKEN != "0"
+    
+    # 推送模式：single=逐只推送, merged=合并一份推送（默认）
+    push_mode = os.environ.get("PUSH_MODE", "merged")
 
     print(f"准备分析 {len(stocks)} 只股票: {stocks}")
     print(f"AKShare 版本: {ak.__version__}")
     if enable_push:
-        print(f"📱 微信推送: 已启用 (Token: {PUSHPLUS_TOKEN[:8]}...)")
+        print(f"📱 微信推送: 已启用 (模式: {push_mode})")
     else:
         print(f"📱 微信推送: 已关闭")
 
     success_count = 0
     fail_count = 0
-    all_summaries = []  # 收集所有股票摘要，最后发汇总
+    all_stock_cards = []  # 收集所有股票的推送卡片，最后合并
 
     for stock_code in stocks:
         try:
             report, analysis_data = generate_stock_report(stock_code)
 
-            output_dir = os.environ.get("REPORT_DIR", "/Users/yikehuolongguo/WorkBuddy/Claw/stock-analyzer-enhanced/reports")
+            output_dir = os.environ.get("REPORT_DIR", "reports")
             os.makedirs(output_dir, exist_ok=True)
             filename = f"enhanced_{stock_code}_{datetime.now().strftime('%Y%m%d')}.md"
             filepath = os.path.join(output_dir, filename)
@@ -1345,7 +1348,7 @@ def main():
 
             print(f"  ✅ 报告已保存: {filepath}")
 
-            # 单只股票推送微信（复用已有分析数据）
+            # 收集推送卡片
             if enable_push:
                 push_title, push_html = build_push_summary(
                     stock_code,
@@ -1356,7 +1359,12 @@ def main():
                     analysis_data["dcf"],
                     analysis_data.get("ai_analysis"),
                 )
-                pushplus_send(push_title, push_html)
+                if push_mode == "single":
+                    # 逐只推送模式
+                    pushplus_send(push_title, push_html)
+                else:
+                    # 合并推送模式：收集卡片
+                    all_stock_cards.append((push_title, push_html))
 
             success_count += 1
         except Exception as e:
@@ -1369,20 +1377,50 @@ def main():
             print(f"  ⏳ 等待5秒后分析下一只...")
             time.sleep(5)
 
-    # 汇总推送
+    # 合并推送：所有股票合并成一份
     if enable_push and success_count > 0:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        summary_html = f"""
-        <div style="font-family: -apple-system, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
-          <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:16px; border-radius:12px; margin-bottom:12px;">
-            <h2 style="margin:0 0 4px 0; font-size:18px;">📊 今日股票分析汇总</h2>
-            <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 成功{success_count}只 | 失败{fail_count}只</p>
-          </div>
-          <p style="font-size:13px; color:#666; text-align:center;">
-            各股详细分析已逐条推送，完整报告请查看本地文件
-          </p>
-        </div>"""
-        pushplus_send("📊 今日股票分析汇总", summary_html)
+        
+        if push_mode == "merged" and all_stock_cards:
+            # 合并所有股票卡片为一份推送
+            merged_html = f"""
+            <div style="font-family: -apple-system, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
+              <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:16px; border-radius:12px; margin-bottom:12px;">
+                <h2 style="margin:0 0 4px 0; font-size:18px;">📊 股票深度分析汇总</h2>
+                <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 成功{success_count}只 | 失败{fail_count}只</p>
+              </div>
+            """
+            for i, (title, html) in enumerate(all_stock_cards, 1):
+                # 去掉每个卡片的外层 div 包裹，避免嵌套
+                card_html = html.strip()
+                # 移除最外层 div 的开始和结束标签
+                if card_html.startswith('<div style="font-family'):
+                    # 找到第一个 > 后面的内容
+                    first_gt = card_html.index('>') + 1
+                    card_html = card_html[first_gt:]
+                    if card_html.endswith('</div>'):
+                        card_html = card_html[:-6]
+                merged_html += card_html
+            
+            merged_html += """
+              <p style="text-align:center; font-size:11px; color:#999; margin-top:8px;">
+                ⚠️ 仅供参考，不构成投资建议 | AI股票分析增强系统 v5
+              </p>
+            </div>"""
+            pushplus_send(f"📊 股票深度分析汇总 ({success_count}只)", merged_html)
+        else:
+            # 逐只推送模式的汇总
+            summary_html = f"""
+            <div style="font-family: -apple-system, sans-serif; max-width:600px; margin:0 auto; padding:10px;">
+              <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:16px; border-radius:12px; margin-bottom:12px;">
+                <h2 style="margin:0 0 4px 0; font-size:18px;">📊 今日股票分析汇总</h2>
+                <p style="margin:0; font-size:13px; opacity:0.85;">{now} | 成功{success_count}只 | 失败{fail_count}只</p>
+              </div>
+              <p style="font-size:13px; color:#666; text-align:center;">
+                各股详细分析已逐条推送，完整报告请查看本地文件
+              </p>
+            </div>"""
+            pushplus_send("📊 今日股票分析汇总", summary_html)
 
     print(f"\n{'='*50}")
     print(f"分析完成！成功: {success_count}, 失败: {fail_count}")
