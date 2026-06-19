@@ -1,8 +1,8 @@
 name: 🔥 深度分析 v6（一份推送）
 
 on:
-  schedule:
-    - cron: '30 10 * * 1-5'
+  # schedule:
+  #   - cron: '30 10 * * 1-5'  # 已暂停定时推送
 
   workflow_dispatch:
     inputs:
